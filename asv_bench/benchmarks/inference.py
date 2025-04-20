@@ -9,6 +9,7 @@ it is likely that these benchmarks will be unaffected.
 import numpy as np
 
 from pandas import (
+    Index,
     NaT,
     Series,
     date_range,
@@ -17,35 +18,27 @@ from pandas import (
     to_timedelta,
 )
 
-from .pandas_vb_common import (
-    lib,
-    tm,
-)
+from .pandas_vb_common import lib
 
 
 class ToNumeric:
-
-    params = ["ignore", "coerce"]
-    param_names = ["errors"]
-
-    def setup(self, errors):
+    def setup(self):
         N = 10000
         self.float = Series(np.random.randn(N))
         self.numstr = self.float.astype("str")
-        self.str = Series(tm.makeStringIndex(N))
+        self.str = Series(Index([f"i-{i}" for i in range(N)], dtype=object))
 
-    def time_from_float(self, errors):
-        to_numeric(self.float, errors=errors)
+    def time_from_float(self):
+        to_numeric(self.float, errors="coerce")
 
-    def time_from_numeric_str(self, errors):
-        to_numeric(self.numstr, errors=errors)
+    def time_from_numeric_str(self):
+        to_numeric(self.numstr, errors="coerce")
 
-    def time_from_str(self, errors):
-        to_numeric(self.str, errors=errors)
+    def time_from_str(self):
+        to_numeric(self.str, errors="coerce")
 
 
 class ToNumericDowncast:
-
     param_names = ["dtype", "downcast"]
     params = [
         [
@@ -85,8 +78,8 @@ class MaybeConvertNumeric:
     #  go in benchmarks/libs.py
 
     def setup_cache(self):
-        N = 10 ** 6
-        arr = np.repeat([2 ** 63], N) + np.arange(N).astype("uint64")
+        N = 10**6
+        arr = np.repeat([2**63], N) + np.arange(N).astype("uint64")
         data = arr.astype(object)
         data[1::2] = arr[1::2].astype(str)
         data[-1] = -1
@@ -101,7 +94,7 @@ class MaybeConvertObjects:
     #  does have some run-time imports from outside of _libs
 
     def setup(self):
-        N = 10 ** 5
+        N = 10**5
 
         data = list(range(N))
         data[0] = NaT
@@ -115,18 +108,26 @@ class MaybeConvertObjects:
 class ToDatetimeFromIntsFloats:
     def setup(self):
         self.ts_sec = Series(range(1521080307, 1521685107), dtype="int64")
+        self.ts_sec_uint = Series(range(1521080307, 1521685107), dtype="uint64")
         self.ts_sec_float = self.ts_sec.astype("float64")
 
         self.ts_nanosec = 1_000_000 * self.ts_sec
+        self.ts_nanosec_uint = 1_000_000 * self.ts_sec_uint
         self.ts_nanosec_float = self.ts_nanosec.astype("float64")
 
-    # speed of int64 and float64 paths should be comparable
+    # speed of int64, uint64 and float64 paths should be comparable
 
     def time_nanosec_int64(self):
         to_datetime(self.ts_nanosec, unit="ns")
 
+    def time_nanosec_uint64(self):
+        to_datetime(self.ts_nanosec_uint, unit="ns")
+
     def time_nanosec_float64(self):
         to_datetime(self.ts_nanosec_float, unit="ns")
+
+    def time_sec_uint64(self):
+        to_datetime(self.ts_sec_uint, unit="s")
 
     def time_sec_int64(self):
         to_datetime(self.ts_sec, unit="s")
@@ -145,7 +146,6 @@ class ToDatetimeYYYYMMDD:
 
 
 class ToDatetimeCacheSmallCount:
-
     params = ([True, False], [50, 500, 5000, 100000])
     param_names = ["cache", "count"]
 
@@ -159,12 +159,13 @@ class ToDatetimeCacheSmallCount:
 
 class ToDatetimeISO8601:
     def setup(self):
-        rng = date_range(start="1/1/2000", periods=20000, freq="H")
+        rng = date_range(start="1/1/2000", periods=20000, freq="h")
         self.strings = rng.strftime("%Y-%m-%d %H:%M:%S").tolist()
         self.strings_nosep = rng.strftime("%Y%m%d %H:%M:%S").tolist()
         self.strings_tz_space = [
             x.strftime("%Y-%m-%d %H:%M:%S") + " -0800" for x in rng
         ]
+        self.strings_zero_tz = [x.strftime("%Y-%m-%d %H:%M:%S") + "Z" for x in rng]
 
     def time_iso8601(self):
         to_datetime(self.strings)
@@ -181,6 +182,10 @@ class ToDatetimeISO8601:
     def time_iso8601_tz_spaceformat(self):
         to_datetime(self.strings_tz_space)
 
+    def time_iso8601_infer_zero_tz_fromat(self):
+        # GH 41047
+        to_datetime(self.strings_zero_tz)
+
 
 class ToDatetimeNONISO8601:
     def setup(self):
@@ -195,7 +200,7 @@ class ToDatetimeNONISO8601:
         to_datetime(self.same_offset)
 
     def time_different_offset(self):
-        to_datetime(self.diff_offset)
+        to_datetime(self.diff_offset, utc=True)
 
 
 class ToDatetimeFormatQuarters:
@@ -210,7 +215,7 @@ class ToDatetimeFormat:
     def setup(self):
         N = 100000
         self.s = Series(["19MAY11", "19MAY11:00:00:00"] * N)
-        self.s2 = self.s.str.replace(":\\S+$", "")
+        self.s2 = self.s.str.replace(":\\S+$", "", regex=True)
 
         self.same_offset = ["10/11/2018 00:00:00.045-07:00"] * N
         self.diff_offset = [
@@ -226,9 +231,6 @@ class ToDatetimeFormat:
     def time_same_offset(self):
         to_datetime(self.same_offset, format="%m/%d/%Y %H:%M:%S.%f%z")
 
-    def time_different_offset(self):
-        to_datetime(self.diff_offset, format="%m/%d/%Y %H:%M:%S.%f%z")
-
     def time_same_offset_to_utc(self):
         to_datetime(self.same_offset, format="%m/%d/%Y %H:%M:%S.%f%z", utc=True)
 
@@ -237,7 +239,6 @@ class ToDatetimeFormat:
 
 
 class ToDatetimeCache:
-
     params = [True, False]
     param_names = ["cache"]
 
@@ -284,17 +285,13 @@ class ToTimedelta:
 
 
 class ToTimedeltaErrors:
-
-    params = ["coerce", "ignore"]
-    param_names = ["errors"]
-
-    def setup(self, errors):
+    def setup(self):
         ints = np.random.randint(0, 60, size=10000)
         self.arr = [f"{i} days" for i in ints]
         self.arr[-1] = "apple"
 
-    def time_convert(self, errors):
-        to_timedelta(self.arr, errors=errors)
+    def time_convert(self):
+        to_timedelta(self.arr, errors="coerce")
 
 
 from .pandas_vb_common import setup  # noqa: F401 isort:skip

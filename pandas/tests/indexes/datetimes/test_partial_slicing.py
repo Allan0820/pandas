@@ -1,7 +1,6 @@
-""" test partial slicing on Series/Frame """
+"""test partial slicing on Series/Frame"""
 
 from datetime import datetime
-import operator
 
 import numpy as np
 import pytest
@@ -10,6 +9,7 @@ from pandas import (
     DataFrame,
     DatetimeIndex,
     Index,
+    MultiIndex,
     Series,
     Timedelta,
     Timestamp,
@@ -19,6 +19,26 @@ import pandas._testing as tm
 
 
 class TestSlicing:
+    def test_string_index_series_name_converted(self):
+        # GH#1644
+        df = DataFrame(
+            np.random.default_rng(2).standard_normal((10, 4)),
+            index=date_range("1/1/2000", periods=10),
+        )
+
+        result = df.loc["1/3/2000"]
+        assert result.name == df.index[2]
+
+        result = df.T["1/3/2000"]
+        assert result.name == df.index[2]
+
+    def test_stringified_slice_with_tz(self):
+        # GH#2658
+        start = "2013-01-07"
+        idx = date_range(start=start, freq="1D", periods=10, tz="US/Eastern")
+        df = DataFrame(np.arange(10), index=idx)
+        df["2013-01-14 23:44:34.437768-05:00":]  # no exception here
+
     def test_return_type_doesnt_depend_on_monotonicity(self):
         # GH#24892 we get Series back regardless of whether our DTI is monotonic
         dti = date_range(start="2015-5-13 23:59:00", freq="min", periods=3)
@@ -108,7 +128,7 @@ class TestSlicing:
         expected = s[s.index.year == 2005]
         tm.assert_series_equal(result, expected)
 
-        df = DataFrame(np.random.rand(len(dti), 5), index=dti)
+        df = DataFrame(np.random.default_rng(2).random((len(dti), 5)), index=dti)
         result = df.loc["2005"]
         expected = df[df.index.year == 2005]
         tm.assert_frame_equal(result, expected)
@@ -139,7 +159,7 @@ class TestSlicing:
         s = Series(np.arange(len(dti)), index=dti)
         assert len(s["2001Q1"]) == 90
 
-        df = DataFrame(np.random.rand(len(dti), 5), index=dti)
+        df = DataFrame(np.random.default_rng(2).random((len(dti), 5)), index=dti)
         assert len(df.loc["1Q01"]) == 90
 
     def test_slice_month(self):
@@ -147,7 +167,7 @@ class TestSlicing:
         s = Series(np.arange(len(dti)), index=dti)
         assert len(s["2005-11"]) == 30
 
-        df = DataFrame(np.random.rand(len(dti), 5), index=dti)
+        df = DataFrame(np.random.default_rng(2).random((len(dti), 5)), index=dti)
         assert len(df.loc["2005-11"]) == 30
 
         tm.assert_series_equal(s["2005-11"], s["11-2005"])
@@ -175,7 +195,7 @@ class TestSlicing:
             s["2004-12-31"]
 
     def test_partial_slice_daily(self):
-        rng = date_range(freq="H", start=datetime(2005, 1, 31), periods=500)
+        rng = date_range(freq="h", start=datetime(2005, 1, 31), periods=500)
         s = Series(np.arange(len(rng)), index=rng)
 
         result = s["2005-1-31"]
@@ -185,7 +205,7 @@ class TestSlicing:
             s["2004-12-31 00"]
 
     def test_partial_slice_hourly(self):
-        rng = date_range(freq="T", start=datetime(2005, 1, 1, 20, 0, 0), periods=500)
+        rng = date_range(freq="min", start=datetime(2005, 1, 1, 20, 0, 0), periods=500)
         s = Series(np.arange(len(rng)), index=rng)
 
         result = s["2005-1-1"]
@@ -199,7 +219,7 @@ class TestSlicing:
             s["2004-12-31 00:15"]
 
     def test_partial_slice_minutely(self):
-        rng = date_range(freq="S", start=datetime(2005, 1, 1, 23, 59, 0), periods=500)
+        rng = date_range(freq="s", start=datetime(2005, 1, 1, 23, 59, 0), periods=500)
         s = Series(np.arange(len(rng)), index=rng)
 
         result = s["2005-1-1 23:59"]
@@ -216,7 +236,7 @@ class TestSlicing:
         rng = date_range(
             start=datetime(2005, 1, 1, 0, 0, 59, microsecond=999990),
             periods=20,
-            freq="US",
+            freq="us",
         )
         s = Series(np.arange(20), rng)
 
@@ -265,7 +285,7 @@ class TestSlicing:
                 result = df["a"][ts_string]
                 assert isinstance(result, np.int64)
                 assert result == expected
-                msg = fr"^'{ts_string}'$"
+                msg = rf"^'{ts_string}'$"
                 with pytest.raises(KeyError, match=msg):
                     df[ts_string]
 
@@ -279,12 +299,10 @@ class TestSlicing:
                     expected = df["a"][theslice]
                     tm.assert_series_equal(result, expected)
 
-                    # Frame should return slice as well
-                    with tm.assert_produces_warning(FutureWarning):
-                        # GH#36179 deprecated this indexing
-                        result = df[ts_string]
-                    expected = df[theslice]
-                    tm.assert_frame_equal(result, expected)
+                    # pre-2.0 df[ts_string] was overloaded to interpret this
+                    #  as slicing along index
+                    with pytest.raises(KeyError, match=ts_string):
+                        df[ts_string]
 
             # Timestamp with resolution more precise than index
             # Compatible with existing key
@@ -295,7 +313,7 @@ class TestSlicing:
                 result = df["a"][ts_string]
                 assert isinstance(result, np.int64)
                 assert result == 2
-                msg = fr"^'{ts_string}'$"
+                msg = rf"^'{ts_string}'$"
                 with pytest.raises(KeyError, match=msg):
                     df[ts_string]
 
@@ -304,14 +322,13 @@ class TestSlicing:
             for fmt, res in list(zip(formats, resolutions))[rnum + 1 :]:
                 ts = index[1] + Timedelta("1 " + res)
                 ts_string = ts.strftime(fmt)
-                msg = fr"^'{ts_string}'$"
+                msg = rf"^'{ts_string}'$"
                 with pytest.raises(KeyError, match=msg):
                     df["a"][ts_string]
                 with pytest.raises(KeyError, match=msg):
                     df[ts_string]
 
     def test_partial_slicing_with_multiindex(self):
-
         # GH 4758
         # partial string indexing with a multi-index buggy
         df = DataFrame(
@@ -320,7 +337,7 @@ class TestSlicing:
                 "TICKER": ["ABC", "MNP", "XYZ", "XYZ"],
                 "val": [1, 2, 3, 4],
             },
-            index=date_range("2013-06-19 09:30:00", periods=4, freq="5T"),
+            index=date_range("2013-06-19 09:30:00", periods=4, freq="5min"),
         )
         df_multi = df.set_index(["ACCOUNT", "TICKER"], append=True)
 
@@ -344,9 +361,12 @@ class TestSlicing:
     def test_partial_slicing_with_multiindex_series(self):
         # GH 4294
         # partial slice on a series mi
-        ser = DataFrame(
-            np.random.rand(1000, 1000), index=date_range("2000-1-1", periods=1000)
-        ).stack()
+        ser = Series(
+            range(250),
+            index=MultiIndex.from_product(
+                [date_range("2000-1-1", periods=50), range(5)]
+            ),
+        )
 
         s2 = ser[:-1].copy()
         expected = s2["2000-1-4"]
@@ -362,23 +382,24 @@ class TestSlicing:
         result = df2.loc[Timestamp("2000-1-4")]
         tm.assert_frame_equal(result, expected)
 
-    def test_partial_slice_doesnt_require_monotonicity(self):
-        # For historical reasons.
+    def test_partial_slice_requires_monotonicity(self):
+        # Disallowed since 2.0 (GH 37819)
         ser = Series(np.arange(10), date_range("2014-01-01", periods=10))
 
-        nonmonotonic = ser[[3, 5, 4]]
-        expected = nonmonotonic.iloc[:0]
+        nonmonotonic = ser.iloc[[3, 5, 4]]
         timestamp = Timestamp("2014-01-10")
-        with tm.assert_produces_warning(FutureWarning):
-            result = nonmonotonic["2014-01-10":]
-        tm.assert_series_equal(result, expected)
+        with pytest.raises(
+            KeyError, match="Value based partial slicing on non-monotonic"
+        ):
+            nonmonotonic["2014-01-10":]
 
         with pytest.raises(KeyError, match=r"Timestamp\('2014-01-10 00:00:00'\)"):
             nonmonotonic[timestamp:]
 
-        with tm.assert_produces_warning(FutureWarning):
-            result = nonmonotonic.loc["2014-01-10":]
-        tm.assert_series_equal(result, expected)
+        with pytest.raises(
+            KeyError, match="Value based partial slicing on non-monotonic"
+        ):
+            nonmonotonic.loc["2014-01-10":]
 
         with pytest.raises(KeyError, match=r"Timestamp\('2014-01-10 00:00:00'\)"):
             nonmonotonic.loc[timestamp:]
@@ -394,40 +415,6 @@ class TestSlicing:
 
         result = df.loc["2016-10-01T00:00:00":]
         tm.assert_frame_equal(result, df)
-
-    @pytest.mark.parametrize(
-        "datetimelike",
-        [
-            Timestamp("20130101"),
-            datetime(2013, 1, 1),
-            np.datetime64("2013-01-01T00:00", "ns"),
-        ],
-    )
-    @pytest.mark.parametrize(
-        "op,expected",
-        [
-            (operator.lt, [True, False, False, False]),
-            (operator.le, [True, True, False, False]),
-            (operator.eq, [False, True, False, False]),
-            (operator.gt, [False, False, False, True]),
-        ],
-    )
-    def test_selection_by_datetimelike(self, datetimelike, op, expected):
-        # GH issue #17965, test for ability to compare datetime64[ns] columns
-        # to datetimelike
-        df = DataFrame(
-            {
-                "A": [
-                    Timestamp("20120101"),
-                    Timestamp("20130101"),
-                    np.nan,
-                    Timestamp("20130103"),
-                ]
-            }
-        )
-        result = op(df.A, datetimelike)
-        expected = Series(expected, name="A")
-        tm.assert_series_equal(result, expected)
 
     @pytest.mark.parametrize(
         "start",
@@ -463,15 +450,17 @@ class TestSlicing:
         with pytest.raises(ValueError, match="Both dates must"):
             df[start : end[:-4] + "1:00"]
 
+        df = df.tz_localize(None)
         with pytest.raises(ValueError, match="The index must be timezone"):
-            df = df.tz_localize(None)
             df[start:end]
 
     def test_slice_reduce_to_series(self):
         # GH 27516
-        df = DataFrame({"A": range(24)}, index=date_range("2000", periods=24, freq="M"))
+        df = DataFrame(
+            {"A": range(24)}, index=date_range("2000", periods=24, freq="ME")
+        )
         expected = Series(
-            range(12), index=date_range("2000", periods=12, freq="M"), name="A"
+            range(12), index=date_range("2000", periods=12, freq="ME"), name="A"
         )
         result = df.loc["2000", "A"]
         tm.assert_series_equal(result, expected)

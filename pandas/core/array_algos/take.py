@@ -13,18 +13,23 @@ from pandas._libs import (
     algos as libalgos,
     lib,
 )
-from pandas._typing import ArrayLike
 
 from pandas.core.dtypes.cast import maybe_promote
 from pandas.core.dtypes.common import (
     ensure_platform_int,
-    is_1d_only_ea_obj,
+    is_1d_only_ea_dtype,
 )
 from pandas.core.dtypes.missing import na_value_for_dtype
 
 from pandas.core.construction import ensure_wrapped_if_datetimelike
 
 if TYPE_CHECKING:
+    from pandas._typing import (
+        ArrayLike,
+        AxisInt,
+        npt,
+    )
+
     from pandas.core.arrays._mixins import NDArrayBackedExtensionArray
     from pandas.core.arrays.base import ExtensionArray
 
@@ -33,37 +38,33 @@ if TYPE_CHECKING:
 def take_nd(
     arr: np.ndarray,
     indexer,
-    axis: int = ...,
+    axis: AxisInt = ...,
     fill_value=...,
     allow_fill: bool = ...,
-) -> np.ndarray:
-    ...
+) -> np.ndarray: ...
 
 
 @overload
 def take_nd(
     arr: ExtensionArray,
     indexer,
-    axis: int = ...,
+    axis: AxisInt = ...,
     fill_value=...,
     allow_fill: bool = ...,
-) -> ArrayLike:
-    ...
+) -> ArrayLike: ...
 
 
 def take_nd(
     arr: ArrayLike,
     indexer,
-    axis: int = 0,
+    axis: AxisInt = 0,
     fill_value=lib.no_default,
     allow_fill: bool = True,
 ) -> ArrayLike:
-
     """
     Specialized Cython take which sets NaN values in one pass
 
-    This dispatches to ``take`` defined on ExtensionArrays. It does not
-    currently dispatch to ``SparseArray.take`` for sparse ``arr``.
+    This dispatches to ``take`` defined on ExtensionArrays.
 
     Note: this function assumes that the indexer is a valid(ated) indexer with
     no out of bound indices.
@@ -91,11 +92,17 @@ def take_nd(
     """
     if fill_value is lib.no_default:
         fill_value = na_value_for_dtype(arr.dtype, compat=False)
+    elif lib.is_np_dtype(arr.dtype, "mM"):
+        dtype, fill_value = maybe_promote(arr.dtype, fill_value)
+        if arr.dtype != dtype:
+            # EA.take is strict about returning a new object of the same type
+            # so for that case cast upfront
+            arr = arr.astype(dtype)
 
     if not isinstance(arr, np.ndarray):
         # i.e. ExtensionArray,
         # includes for EA to catch DatetimeArray, TimedeltaArray
-        if not is_1d_only_ea_obj(arr):
+        if not is_1d_only_ea_dtype(arr.dtype):
             # i.e. DatetimeArray, TimedeltaArray
             arr = cast("NDArrayBackedExtensionArray", arr)
             return arr.take(
@@ -110,19 +117,18 @@ def take_nd(
 
 def _take_nd_ndarray(
     arr: np.ndarray,
-    indexer,
-    axis: int,
+    indexer: npt.NDArray[np.intp] | None,
+    axis: AxisInt,
     fill_value,
     allow_fill: bool,
 ) -> np.ndarray:
-
     if indexer is None:
         indexer = np.arange(arr.shape[axis], dtype=np.intp)
         dtype, fill_value = arr.dtype, arr.dtype.type()
     else:
         indexer = ensure_platform_int(indexer)
 
-    indexer, dtype, fill_value, mask_info = _take_preprocess_indexer_and_fill_value(
+    dtype, fill_value, mask_info = _take_preprocess_indexer_and_fill_value(
         arr, indexer, fill_value, allow_fill
     )
 
@@ -158,56 +164,10 @@ def _take_nd_ndarray(
     return out
 
 
-def take_1d(
-    arr: ArrayLike,
-    indexer: np.ndarray,
-    fill_value=None,
-    allow_fill: bool = True,
-) -> ArrayLike:
-    """
-    Specialized version for 1D arrays. Differences compared to `take_nd`:
-
-    - Assumes input array has already been converted to numpy array / EA
-    - Assumes indexer is already guaranteed to be int64 dtype ndarray
-    - Only works for 1D arrays
-
-    To ensure the lowest possible overhead.
-
-    Note: similarly to `take_nd`, this function assumes that the indexer is
-    a valid(ated) indexer with no out of bound indices.
-    """
-    if not isinstance(arr, np.ndarray):
-        # ExtensionArray -> dispatch to their method
-
-        # error: Argument 1 to "take" of "ExtensionArray" has incompatible type
-        # "ndarray"; expected "Sequence[int]"
-        return arr.take(
-            indexer,  # type: ignore[arg-type]
-            fill_value=fill_value,
-            allow_fill=allow_fill,
-        )
-
-    if not allow_fill:
-        return arr.take(indexer)
-
-    indexer, dtype, fill_value, mask_info = _take_preprocess_indexer_and_fill_value(
-        arr, indexer, fill_value, True
-    )
-
-    # at this point, it's guaranteed that dtype can hold both the arr values
-    # and the fill_value
-    out = np.empty(indexer.shape, dtype=dtype)
-
-    func = _get_take_nd_function(
-        arr.ndim, arr.dtype, out.dtype, axis=0, mask_info=mask_info
-    )
-    func(arr, indexer, out, fill_value)
-
-    return out
-
-
 def take_2d_multi(
-    arr: np.ndarray, indexer: tuple[np.ndarray, np.ndarray], fill_value=np.nan
+    arr: np.ndarray,
+    indexer: tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]],
+    fill_value=np.nan,
 ) -> np.ndarray:
     """
     Specialized Cython take which sets NaN values in one pass.
@@ -256,6 +216,7 @@ def take_2d_multi(
     if func is not None:
         func(arr, indexer, out=out, fill_value=fill_value)
     else:
+        # test_reindex_multi
         _take_2d_multi_object(
             arr, indexer, out, fill_value=fill_value, mask_info=mask_info
         )
@@ -263,9 +224,9 @@ def take_2d_multi(
     return out
 
 
-@functools.lru_cache(maxsize=128)
+@functools.lru_cache
 def _get_take_nd_function_cached(
-    ndim: int, arr_dtype: np.dtype, out_dtype: np.dtype, axis: int
+    ndim: int, arr_dtype: np.dtype, out_dtype: np.dtype, axis: AxisInt
 ):
     """
     Part of _get_take_nd_function below that doesn't need `mask_info` and thus
@@ -283,6 +244,9 @@ def _get_take_nd_function_cached(
     if func is not None:
         return func
 
+    # We get here with string, uint, float16, and complex dtypes that could
+    #  potentially be handled in algos_take_helper.
+    #  Also a couple with (M8[ns], object) and (m8[ns], object)
     tup = (out_dtype.name, out_dtype.name)
     if ndim == 1:
         func = _take_1d_dict.get(tup, None)
@@ -299,7 +263,11 @@ def _get_take_nd_function_cached(
 
 
 def _get_take_nd_function(
-    ndim: int, arr_dtype: np.dtype, out_dtype: np.dtype, axis: int = 0, mask_info=None
+    ndim: int,
+    arr_dtype: np.dtype,
+    out_dtype: np.dtype,
+    axis: AxisInt = 0,
+    mask_info=None,
 ):
     """
     Get the appropriate "take" implementation for the given dimension, axis
@@ -312,7 +280,7 @@ def _get_take_nd_function(
 
     if func is None:
 
-        def func(arr, indexer, out, fill_value=np.nan):
+        def func(arr, indexer, out, fill_value=np.nan) -> None:
             indexer = ensure_platform_int(indexer)
             _take_nd_object(
                 arr, indexer, out, axis=axis, fill_value=fill_value, mask_info=mask_info
@@ -324,13 +292,20 @@ def _get_take_nd_function(
 def _view_wrapper(f, arr_dtype=None, out_dtype=None, fill_wrap=None):
     def wrapper(
         arr: np.ndarray, indexer: np.ndarray, out: np.ndarray, fill_value=np.nan
-    ):
+    ) -> None:
         if arr_dtype is not None:
             arr = arr.view(arr_dtype)
         if out_dtype is not None:
             out = out.view(out_dtype)
         if fill_wrap is not None:
+            # FIXME: if we get here with dt64/td64 we need to be sure we have
+            #  matching resos
+            if fill_value.dtype.kind == "m":
+                fill_value = fill_value.astype("m8[ns]")
+            else:
+                fill_value = fill_value.astype("M8[ns]")
             fill_value = fill_wrap(fill_value)
+
         f(arr, indexer, out, fill_value=fill_value)
 
     return wrapper
@@ -339,7 +314,7 @@ def _view_wrapper(f, arr_dtype=None, out_dtype=None, fill_wrap=None):
 def _convert_wrapper(f, conv_dtype):
     def wrapper(
         arr: np.ndarray, indexer: np.ndarray, out: np.ndarray, fill_value=np.nan
-    ):
+    ) -> None:
         if conv_dtype == object:
             # GH#39755 avoid casting dt64/td64 to integers
             arr = ensure_wrapped_if_datetimelike(arr)
@@ -362,6 +337,10 @@ _take_1d_dict = {
     ("int32", "int64"): libalgos.take_1d_int32_int64,
     ("int32", "float64"): libalgos.take_1d_int32_float64,
     ("int64", "int64"): libalgos.take_1d_int64_int64,
+    ("uint8", "uint8"): libalgos.take_1d_bool_bool,
+    ("uint16", "int64"): libalgos.take_1d_uint16_uint16,
+    ("uint32", "int64"): libalgos.take_1d_uint32_uint32,
+    ("uint64", "int64"): libalgos.take_1d_uint64_uint64,
     ("int64", "float64"): libalgos.take_1d_int64_float64,
     ("float32", "float32"): libalgos.take_1d_float32_float32,
     ("float32", "float64"): libalgos.take_1d_float32_float64,
@@ -370,6 +349,9 @@ _take_1d_dict = {
     ("bool", "bool"): _view_wrapper(libalgos.take_1d_bool_bool, np.uint8, np.uint8),
     ("bool", "object"): _view_wrapper(libalgos.take_1d_bool_object, np.uint8, None),
     ("datetime64[ns]", "datetime64[ns]"): _view_wrapper(
+        libalgos.take_1d_int64_int64, np.int64, np.int64, np.int64
+    ),
+    ("timedelta64[ns]", "timedelta64[ns]"): _view_wrapper(
         libalgos.take_1d_int64_int64, np.int64, np.int64, np.int64
     ),
 }
@@ -388,6 +370,10 @@ _take_2d_axis0_dict = {
     ("int32", "float64"): libalgos.take_2d_axis0_int32_float64,
     ("int64", "int64"): libalgos.take_2d_axis0_int64_int64,
     ("int64", "float64"): libalgos.take_2d_axis0_int64_float64,
+    ("uint8", "uint8"): libalgos.take_2d_axis0_bool_bool,
+    ("uint16", "uint16"): libalgos.take_2d_axis0_uint16_uint16,
+    ("uint32", "uint32"): libalgos.take_2d_axis0_uint32_uint32,
+    ("uint64", "uint64"): libalgos.take_2d_axis0_uint64_uint64,
     ("float32", "float32"): libalgos.take_2d_axis0_float32_float32,
     ("float32", "float64"): libalgos.take_2d_axis0_float32_float64,
     ("float64", "float64"): libalgos.take_2d_axis0_float64_float64,
@@ -399,6 +385,9 @@ _take_2d_axis0_dict = {
         libalgos.take_2d_axis0_bool_object, np.uint8, None
     ),
     ("datetime64[ns]", "datetime64[ns]"): _view_wrapper(
+        libalgos.take_2d_axis0_int64_int64, np.int64, np.int64, fill_wrap=np.int64
+    ),
+    ("timedelta64[ns]", "timedelta64[ns]"): _view_wrapper(
         libalgos.take_2d_axis0_int64_int64, np.int64, np.int64, fill_wrap=np.int64
     ),
 }
@@ -417,6 +406,10 @@ _take_2d_axis1_dict = {
     ("int32", "float64"): libalgos.take_2d_axis1_int32_float64,
     ("int64", "int64"): libalgos.take_2d_axis1_int64_int64,
     ("int64", "float64"): libalgos.take_2d_axis1_int64_float64,
+    ("uint8", "uint8"): libalgos.take_2d_axis1_bool_bool,
+    ("uint16", "uint16"): libalgos.take_2d_axis1_uint16_uint16,
+    ("uint32", "uint32"): libalgos.take_2d_axis1_uint32_uint32,
+    ("uint64", "uint64"): libalgos.take_2d_axis1_uint64_uint64,
     ("float32", "float32"): libalgos.take_2d_axis1_float32_float32,
     ("float32", "float64"): libalgos.take_2d_axis1_float32_float64,
     ("float64", "float64"): libalgos.take_2d_axis1_float64_float64,
@@ -428,6 +421,9 @@ _take_2d_axis1_dict = {
         libalgos.take_2d_axis1_bool_object, np.uint8, None
     ),
     ("datetime64[ns]", "datetime64[ns]"): _view_wrapper(
+        libalgos.take_2d_axis1_int64_int64, np.int64, np.int64, fill_wrap=np.int64
+    ),
+    ("timedelta64[ns]", "timedelta64[ns]"): _view_wrapper(
         libalgos.take_2d_axis1_int64_int64, np.int64, np.int64, fill_wrap=np.int64
     ),
 }
@@ -459,17 +455,20 @@ _take_2d_multi_dict = {
     ("datetime64[ns]", "datetime64[ns]"): _view_wrapper(
         libalgos.take_2d_multi_int64_int64, np.int64, np.int64, fill_wrap=np.int64
     ),
+    ("timedelta64[ns]", "timedelta64[ns]"): _view_wrapper(
+        libalgos.take_2d_multi_int64_int64, np.int64, np.int64, fill_wrap=np.int64
+    ),
 }
 
 
 def _take_nd_object(
     arr: np.ndarray,
-    indexer: np.ndarray,  # np.ndarray[np.intp]
+    indexer: npt.NDArray[np.intp],
     out: np.ndarray,
-    axis: int,
+    axis: AxisInt,
     fill_value,
     mask_info,
-):
+) -> None:
     if mask_info is not None:
         mask, needs_masking = mask_info
     else:
@@ -487,7 +486,7 @@ def _take_nd_object(
 
 def _take_2d_multi_object(
     arr: np.ndarray,
-    indexer: tuple[np.ndarray, np.ndarray],
+    indexer: tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]],
     out: np.ndarray,
     fill_value,
     mask_info,
@@ -507,20 +506,21 @@ def _take_2d_multi_object(
             out[row_mask, :] = fill_value
         if col_needs:
             out[:, col_mask] = fill_value
-    for i in range(len(row_idx)):
-        u_ = row_idx[i]
-        for j in range(len(col_idx)):
-            v = col_idx[j]
-            out[i, j] = arr[u_, v]
+    for i, u_ in enumerate(row_idx):
+        if u_ != -1:
+            for j, v in enumerate(col_idx):
+                if v != -1:
+                    out[i, j] = arr[u_, v]
 
 
 def _take_preprocess_indexer_and_fill_value(
     arr: np.ndarray,
-    indexer: np.ndarray,
+    indexer: npt.NDArray[np.intp],
     fill_value,
     allow_fill: bool,
+    mask: npt.NDArray[np.bool_] | None = None,
 ):
-    mask_info = None
+    mask_info: tuple[np.ndarray | None, bool] | None = None
 
     if not allow_fill:
         dtype, fill_value = arr.dtype, arr.dtype.type()
@@ -531,8 +531,11 @@ def _take_preprocess_indexer_and_fill_value(
         dtype, fill_value = maybe_promote(arr.dtype, fill_value)
         if dtype != arr.dtype:
             # check if promotion is actually required based on indexer
-            mask = indexer == -1
-            needs_masking = mask.any()
+            if mask is not None:
+                needs_masking = True
+            else:
+                mask = indexer == -1
+                needs_masking = bool(mask.any())
             mask_info = mask, needs_masking
             if not needs_masking:
                 # if not, then depromote, set fill_value to dummy
@@ -540,5 +543,4 @@ def _take_preprocess_indexer_and_fill_value(
                 # to crash when trying to cast it to dtype)
                 dtype, fill_value = arr.dtype, arr.dtype.type()
 
-    indexer = ensure_platform_int(indexer)
-    return indexer, dtype, fill_value, mask_info
+    return dtype, fill_value, mask_info

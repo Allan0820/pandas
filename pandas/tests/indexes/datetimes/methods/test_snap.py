@@ -7,10 +7,11 @@ from pandas import (
 import pandas._testing as tm
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.filterwarnings(r"ignore:PeriodDtype\[B\] is deprecated:FutureWarning")
+@pytest.mark.filterwarnings("ignore:Period with BDay freq:FutureWarning")
 @pytest.mark.parametrize("tz", [None, "Asia/Shanghai", "Europe/Berlin"])
 @pytest.mark.parametrize("name", [None, "my_dti"])
-def test_dti_snap(name, tz):
+def test_dti_snap(name, tz, unit):
     dti = DatetimeIndex(
         [
             "1/1/2002",
@@ -25,10 +26,14 @@ def test_dti_snap(name, tz):
         tz=tz,
         freq="D",
     )
+    dti = dti.as_unit(unit)
 
     result = dti.snap(freq="W-MON")
-    expected = date_range("12/31/2001", "1/7/2002", name=name, tz=tz, freq="w-mon")
+    msg = "'w-mon' is deprecated and will be removed in a future version."
+    with tm.assert_produces_warning(FutureWarning, match=msg):
+        expected = date_range("12/31/2001", "1/7/2002", name=name, tz=tz, freq="w-mon")
     expected = expected.repeat([3, 4])
+    expected = expected.as_unit(unit)
     tm.assert_index_equal(result, expected)
     assert result.tz == expected.tz
     assert result.freq is None
@@ -36,8 +41,11 @@ def test_dti_snap(name, tz):
 
     result = dti.snap(freq="B")
 
-    expected = date_range("1/1/2002", "1/7/2002", name=name, tz=tz, freq="b")
+    msg = "'b' is deprecated and will be removed in a future version."
+    with tm.assert_produces_warning(FutureWarning, match=msg):
+        expected = date_range("1/1/2002", "1/7/2002", name=name, tz=tz, freq="b")
     expected = expected.repeat([1, 1, 1, 2, 2])
+    expected = expected.as_unit(unit)
     tm.assert_index_equal(result, expected)
     assert result.tz == expected.tz
     assert result.freq is None

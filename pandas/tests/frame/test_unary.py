@@ -3,25 +3,26 @@ from decimal import Decimal
 import numpy as np
 import pytest
 
+from pandas.compat.numpy import np_version_gte1p25
+
 import pandas as pd
 import pandas._testing as tm
 
 
 class TestDataFrameUnaryOperators:
-    # __pos__, __neg__, __inv__
+    # __pos__, __neg__, __invert__
 
     @pytest.mark.parametrize(
-        "df,expected",
+        "df_data,expected_data",
         [
-            (pd.DataFrame({"a": [-1, 1]}), pd.DataFrame({"a": [1, -1]})),
-            (pd.DataFrame({"a": [False, True]}), pd.DataFrame({"a": [True, False]})),
-            (
-                pd.DataFrame({"a": pd.Series(pd.to_timedelta([-1, 1]))}),
-                pd.DataFrame({"a": pd.Series(pd.to_timedelta([1, -1]))}),
-            ),
+            ([-1, 1], [1, -1]),
+            ([False, True], [True, False]),
+            (pd.to_timedelta([-1, 1]), pd.to_timedelta([1, -1])),
         ],
     )
-    def test_neg_numeric(self, df, expected):
+    def test_neg_numeric(self, df_data, expected_data):
+        df = pd.DataFrame({"a": df_data})
+        expected = pd.DataFrame({"a": expected_data})
         tm.assert_frame_equal(-df, expected)
         tm.assert_series_equal(-df["a"], expected["a"])
 
@@ -40,16 +41,18 @@ class TestDataFrameUnaryOperators:
         tm.assert_series_equal(-df["a"], expected["a"])
 
     @pytest.mark.parametrize(
-        "df",
+        "df_data",
         [
-            pd.DataFrame({"a": ["a", "b"]}),
-            pd.DataFrame({"a": pd.to_datetime(["2017-01-22", "1970-01-01"])}),
+            ["a", "b"],
+            pd.to_datetime(["2017-01-22", "1970-01-01"]),
         ],
     )
-    def test_neg_raises(self, df):
+    def test_neg_raises(self, df_data, using_infer_string):
+        df = pd.DataFrame({"a": df_data})
         msg = (
             "bad operand type for unary -: 'str'|"
-            r"Unary negative expects numeric dtype, not datetime64\[ns\]"
+            r"bad operand type for unary -: 'DatetimeArray'|"
+            "unary '-' not supported for dtype"
         )
         with pytest.raises(TypeError, match=msg):
             (-df)
@@ -82,42 +85,101 @@ class TestDataFrameUnaryOperators:
         )
         tm.assert_frame_equal(result, expected)
 
+    def test_invert_empty_not_input(self):
+        # GH#51032
+        df = pd.DataFrame()
+        result = ~df
+        tm.assert_frame_equal(df, result)
+        assert df is not result
+
     @pytest.mark.parametrize(
-        "df",
+        "df_data",
         [
-            pd.DataFrame({"a": [-1, 1]}),
-            pd.DataFrame({"a": [False, True]}),
-            pd.DataFrame({"a": pd.Series(pd.to_timedelta([-1, 1]))}),
+            [-1, 1],
+            [False, True],
+            pd.to_timedelta([-1, 1]),
         ],
     )
-    def test_pos_numeric(self, df):
+    def test_pos_numeric(self, df_data):
         # GH#16073
+        df = pd.DataFrame({"a": df_data})
         tm.assert_frame_equal(+df, df)
         tm.assert_series_equal(+df["a"], df["a"])
 
     @pytest.mark.parametrize(
-        "df",
+        "df_data",
         [
-            # numpy changing behavior in the future
-            pytest.param(
-                pd.DataFrame({"a": ["a", "b"]}),
-                marks=[pytest.mark.filterwarnings("ignore")],
-            ),
-            pd.DataFrame({"a": np.array([-1, 2], dtype=object)}),
-            pd.DataFrame({"a": [Decimal("-1.0"), Decimal("2.0")]}),
+            np.array([-1, 2], dtype=object),
+            [Decimal("-1.0"), Decimal("2.0")],
         ],
     )
-    def test_pos_object(self, df):
+    def test_pos_object(self, df_data):
         # GH#21380
+        df = pd.DataFrame({"a": df_data})
         tm.assert_frame_equal(+df, df)
         tm.assert_series_equal(+df["a"], df["a"])
 
-    @pytest.mark.parametrize(
-        "df", [pd.DataFrame({"a": pd.to_datetime(["2017-01-22", "1970-01-01"])})]
-    )
-    def test_pos_raises(self, df):
-        msg = "Unary plus expects .* dtype, not datetime64\\[ns\\]"
+    @pytest.mark.filterwarnings("ignore:Applying:DeprecationWarning")
+    def test_pos_object_raises(self):
+        # GH#21380
+        df = pd.DataFrame({"a": ["a", "b"]})
+        if np_version_gte1p25:
+            with pytest.raises(
+                TypeError, match=r"^bad operand type for unary \+: \'str\'$"
+            ):
+                tm.assert_frame_equal(+df, df)
+        else:
+            tm.assert_series_equal(+df["a"], df["a"])
+
+    def test_pos_raises(self):
+        df = pd.DataFrame({"a": pd.to_datetime(["2017-01-22", "1970-01-01"])})
+        msg = r"bad operand type for unary \+: 'DatetimeArray'"
         with pytest.raises(TypeError, match=msg):
             (+df)
         with pytest.raises(TypeError, match=msg):
             (+df["a"])
+
+    def test_unary_nullable(self):
+        df = pd.DataFrame(
+            {
+                "a": pd.array([1, -2, 3, pd.NA], dtype="Int64"),
+                "b": pd.array([4.0, -5.0, 6.0, pd.NA], dtype="Float32"),
+                "c": pd.array([True, False, False, pd.NA], dtype="boolean"),
+                # include numpy bool to make sure bool-vs-boolean behavior
+                #  is consistent in non-NA locations
+                "d": np.array([True, False, False, True]),
+            }
+        )
+
+        result = +df
+        res_ufunc = np.positive(df)
+        expected = df
+        # TODO: assert that we have copies?
+        tm.assert_frame_equal(result, expected)
+        tm.assert_frame_equal(res_ufunc, expected)
+
+        result = -df
+        res_ufunc = np.negative(df)
+        expected = pd.DataFrame(
+            {
+                "a": pd.array([-1, 2, -3, pd.NA], dtype="Int64"),
+                "b": pd.array([-4.0, 5.0, -6.0, pd.NA], dtype="Float32"),
+                "c": pd.array([False, True, True, pd.NA], dtype="boolean"),
+                "d": np.array([False, True, True, False]),
+            }
+        )
+        tm.assert_frame_equal(result, expected)
+        tm.assert_frame_equal(res_ufunc, expected)
+
+        result = abs(df)
+        res_ufunc = np.abs(df)
+        expected = pd.DataFrame(
+            {
+                "a": pd.array([1, 2, 3, pd.NA], dtype="Int64"),
+                "b": pd.array([4.0, 5.0, 6.0, pd.NA], dtype="Float32"),
+                "c": pd.array([True, False, False, pd.NA], dtype="boolean"),
+                "d": np.array([True, False, False, True]),
+            }
+        )
+        tm.assert_frame_equal(result, expected)
+        tm.assert_frame_equal(res_ufunc, expected)

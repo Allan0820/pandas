@@ -1,35 +1,34 @@
-# flake8: noqa
+from __future__ import annotations
 
 __docformat__ = "restructuredtext"
 
 # Let users know if they're missing any of our hard dependencies
-hard_dependencies = ("numpy", "pytz", "dateutil")
-missing_dependencies = []
+_hard_dependencies = ("numpy", "dateutil")
 
-for dependency in hard_dependencies:
+for _dependency in _hard_dependencies:
     try:
-        __import__(dependency)
-    except ImportError as e:
-        missing_dependencies.append(f"{dependency}: {e}")
+        __import__(_dependency)
+    except ImportError as _e:  # pragma: no cover
+        raise ImportError(
+            f"Unable to import required dependency {_dependency}. "
+            "Please see the traceback for details."
+        ) from _e
 
-if missing_dependencies:
-    raise ImportError(
-        "Unable to import required dependencies:\n" + "\n".join(missing_dependencies)
-    )
-del hard_dependencies, dependency, missing_dependencies
-
-# numpy compat
-from pandas.compat import is_numpy_dev as _is_numpy_dev
+del _hard_dependencies, _dependency
 
 try:
-    from pandas._libs import hashtable as _hashtable, lib as _lib, tslib as _tslib
-except ImportError as e:  # pragma: no cover
-    module = e.name
+    # numpy compat
+    from pandas.compat import (
+        is_numpy_dev as _is_numpy_dev,  # pyright: ignore[reportUnusedImport] # noqa: F401
+    )
+except ImportError as _err:  # pragma: no cover
+    _module = _err.name
     raise ImportError(
-        f"C extension: {module} not built. If you want to import "
+        f"C extension: {_module} not built. If you want to import "
         "pandas from the source directory, you may need to run "
-        "'python setup.py build_ext --force' to build the C extensions first."
-    ) from e
+        "'python -m pip install -ve . --no-build-isolation -Ceditable-verbose=true' "
+        "to build the C extensions first."
+    ) from _err
 
 from pandas._config import (
     get_option,
@@ -41,10 +40,11 @@ from pandas._config import (
 )
 
 # let init-time option registration happen
-import pandas.core.config_init
+import pandas.core.config_init  # pyright: ignore[reportUnusedImport] # noqa: F401
 
 from pandas.core.api import (
     # dtype
+    ArrowDtype,
     Int8Dtype,
     Int16Dtype,
     Int32Dtype,
@@ -70,11 +70,7 @@ from pandas.core.api import (
     # indexes
     Index,
     CategoricalIndex,
-    Int64Index,
-    UInt64Index,
     RangeIndex,
-    Float64Index,
-    NumericIndex,
     MultiIndex,
     IntervalIndex,
     TimedeltaIndex,
@@ -102,7 +98,6 @@ from pandas.core.api import (
     Grouper,
     factorize,
     unique,
-    value_counts,
     NamedAgg,
     array,
     Categorical,
@@ -111,7 +106,7 @@ from pandas.core.api import (
     DataFrame,
 )
 
-from pandas.core.arrays.sparse import SparseDtype
+from pandas.core.dtypes.dtypes import SparseDtype
 
 from pandas.tseries.api import infer_freq
 from pandas.tseries import offsets
@@ -130,11 +125,13 @@ from pandas.core.reshape.api import (
     pivot,
     pivot_table,
     get_dummies,
+    from_dummies,
     cut,
     qcut,
 )
 
-import pandas.api
+from pandas import api, arrays, errors, io, plotting, tseries
+from pandas import testing
 from pandas.util._print_versions import show_versions
 
 from pandas.io.api import (
@@ -161,7 +158,6 @@ from pandas.io.api import (
     read_parquet,
     read_orc,
     read_feather,
-    read_gbq,
     read_html,
     read_xml,
     read_json,
@@ -170,75 +166,26 @@ from pandas.io.api import (
     read_spss,
 )
 
-from pandas.io.json import _json_normalize as json_normalize
+from pandas.io.json._normalize import json_normalize
 
 from pandas.util._tester import test
-import pandas.testing
-import pandas.arrays
 
 # use the closest tagged version if possible
-from pandas._version import get_versions
+_built_with_meson = False
+try:
+    from pandas._version_meson import (  # pyright: ignore [reportMissingImports]
+        __version__,
+        __git_version__,
+    )
 
-v = get_versions()
-__version__ = v.get("closest-tag", v["version"])
-__git_version__ = v.get("full-revisionid")
-del get_versions, v
+    _built_with_meson = True
+except ImportError:
+    from pandas._version import get_versions
 
-
-# GH 27101
-def __getattr__(name):
-    import warnings
-
-    if name == "datetime":
-        warnings.warn(
-            "The pandas.datetime class is deprecated "
-            "and will be removed from pandas in a future version. "
-            "Import from datetime module instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-
-        from datetime import datetime as dt
-
-        return dt
-
-    elif name == "np":
-
-        warnings.warn(
-            "The pandas.np module is deprecated "
-            "and will be removed from pandas in a future version. "
-            "Import numpy directly instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        import numpy as np
-
-        return np
-
-    elif name in {"SparseSeries", "SparseDataFrame"}:
-        warnings.warn(
-            f"The {name} class is removed from pandas. Accessing it from "
-            "the top-level namespace will also be removed in the next version.",
-            FutureWarning,
-            stacklevel=2,
-        )
-
-        return type(name, (), {})
-
-    elif name == "SparseArray":
-
-        warnings.warn(
-            "The pandas.SparseArray class is deprecated "
-            "and will be removed from pandas in a future version. "
-            "Use pandas.arrays.SparseArray instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        from pandas.core.arrays.sparse import SparseArray as _SparseArray
-
-        return _SparseArray
-
-    raise AttributeError(f"module 'pandas' has no attribute '{name}'")
+    v = get_versions()
+    __version__ = v.get("closest-tag", v["version"])
+    __git_version__ = v.get("full-revisionid")
+    del get_versions, v
 
 
 # module level doc-string
@@ -281,3 +228,121 @@ Here are just a few of the things that pandas does well:
   - Time series-specific functionality: date range generation and frequency
     conversion, moving window statistics, date shifting and lagging.
 """
+
+# Use __all__ to let type checkers know what is part of the public API.
+# Pandas is not (yet) a py.typed library: the public API is determined
+# based on the documentation.
+__all__ = [
+    "NA",
+    "ArrowDtype",
+    "BooleanDtype",
+    "Categorical",
+    "CategoricalDtype",
+    "CategoricalIndex",
+    "DataFrame",
+    "DateOffset",
+    "DatetimeIndex",
+    "DatetimeTZDtype",
+    "ExcelFile",
+    "ExcelWriter",
+    "Flags",
+    "Float32Dtype",
+    "Float64Dtype",
+    "Grouper",
+    "HDFStore",
+    "Index",
+    "IndexSlice",
+    "Int8Dtype",
+    "Int16Dtype",
+    "Int32Dtype",
+    "Int64Dtype",
+    "Interval",
+    "IntervalDtype",
+    "IntervalIndex",
+    "MultiIndex",
+    "NaT",
+    "NamedAgg",
+    "Period",
+    "PeriodDtype",
+    "PeriodIndex",
+    "RangeIndex",
+    "Series",
+    "SparseDtype",
+    "StringDtype",
+    "Timedelta",
+    "TimedeltaIndex",
+    "Timestamp",
+    "UInt8Dtype",
+    "UInt16Dtype",
+    "UInt32Dtype",
+    "UInt64Dtype",
+    "api",
+    "array",
+    "arrays",
+    "bdate_range",
+    "concat",
+    "crosstab",
+    "cut",
+    "date_range",
+    "describe_option",
+    "errors",
+    "eval",
+    "factorize",
+    "from_dummies",
+    "get_dummies",
+    "get_option",
+    "infer_freq",
+    "interval_range",
+    "io",
+    "isna",
+    "isnull",
+    "json_normalize",
+    "lreshape",
+    "melt",
+    "merge",
+    "merge_asof",
+    "merge_ordered",
+    "notna",
+    "notnull",
+    "offsets",
+    "option_context",
+    "options",
+    "period_range",
+    "pivot",
+    "pivot_table",
+    "plotting",
+    "qcut",
+    "read_clipboard",
+    "read_csv",
+    "read_excel",
+    "read_feather",
+    "read_fwf",
+    "read_hdf",
+    "read_html",
+    "read_json",
+    "read_orc",
+    "read_parquet",
+    "read_pickle",
+    "read_sas",
+    "read_spss",
+    "read_sql",
+    "read_sql_query",
+    "read_sql_table",
+    "read_stata",
+    "read_table",
+    "read_xml",
+    "reset_option",
+    "set_eng_float_format",
+    "set_option",
+    "show_versions",
+    "test",
+    "testing",
+    "timedelta_range",
+    "to_datetime",
+    "to_numeric",
+    "to_pickle",
+    "to_timedelta",
+    "tseries",
+    "unique",
+    "wide_to_long",
+]

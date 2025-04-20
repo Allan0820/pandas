@@ -15,17 +15,18 @@ for box in tr.params[0]:
             val = %timeit -o tr.time_ints_to_pydatetime(box, size, tz)
             df.loc[key] = (val.average, val.stdev)
 """
+
 from datetime import (
     timedelta,
     timezone,
 )
+import zoneinfo
 
 from dateutil.tz import (
     gettz,
     tzlocal,
 )
 import numpy as np
-import pytz
 
 try:
     from pandas._libs.tslibs import ints_to_pydatetime
@@ -37,11 +38,11 @@ _tzs = [
     None,
     timezone.utc,
     timezone(timedelta(minutes=60)),
-    pytz.timezone("US/Pacific"),
+    zoneinfo.ZoneInfo("US/Pacific"),
     gettz("Asia/Tokyo"),
     tzlocal_obj,
 ]
-_sizes = [0, 1, 100, 10 ** 4, 10 ** 6]
+_sizes = [0, 1, 100, 10**4, 10**6]
 
 
 class TimeIntsToPydatetime:
@@ -51,13 +52,13 @@ class TimeIntsToPydatetime:
         _tzs,
     )
     param_names = ["box", "size", "tz"]
-    # TODO: fold? freq?
+    # TODO: fold?
 
     def setup(self, box, size, tz):
         if box == "date" and tz is not None:
             # tz is ignored, so avoid running redundant benchmarks
             raise NotImplementedError  # skip benchmark
-        if size == 10 ** 6 and tz is _tzs[-1]:
+        if size == 10**6 and tz is _tzs[-1]:
             # This is cumbersomely-slow, so skip to trim runtime
             raise NotImplementedError  # skip benchmark
 

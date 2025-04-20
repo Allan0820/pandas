@@ -1,18 +1,20 @@
 """Common utilities for Numba operations"""
+
 from __future__ import annotations
 
+import inspect
 import types
-from typing import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from pandas.compat._optional import import_optional_dependency
 from pandas.errors import NumbaUtilError
 
-from pandas.util.version import Version
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 GLOBAL_USE_NUMBA: bool = False
-NUMBA_FUNC_CACHE: dict[tuple[Callable, str], Callable] = {}
 
 
 def maybe_use_numba(engine: str | None) -> bool:
@@ -27,9 +29,7 @@ def set_use_numba(enable: bool = False) -> None:
     GLOBAL_USE_NUMBA = enable
 
 
-def get_jit_arguments(
-    engine_kwargs: dict[str, bool] | None = None, kwargs: dict | None = None
-) -> tuple[bool, bool, bool]:
+def get_jit_arguments(engine_kwargs: dict[str, bool] | None = None) -> dict[str, bool]:
     """
     Return arguments to pass to numba.JIT, falling back on pandas default JIT settings.
 
@@ -37,12 +37,10 @@ def get_jit_arguments(
     ----------
     engine_kwargs : dict, default None
         user passed keyword arguments for numba.JIT
-    kwargs : dict, default None
-        user passed keyword arguments to pass into the JITed function
 
     Returns
     -------
-    (bool, bool, bool)
+    dict[str, bool]
         nopython, nogil, parallel
 
     Raises
@@ -53,62 +51,100 @@ def get_jit_arguments(
         engine_kwargs = {}
 
     nopython = engine_kwargs.get("nopython", True)
-    if kwargs and nopython:
-        raise NumbaUtilError(
-            "numba does not support kwargs with nopython=True: "
-            "https://github.com/numba/numba/issues/2916"
-        )
     nogil = engine_kwargs.get("nogil", False)
     parallel = engine_kwargs.get("parallel", False)
-    return nopython, nogil, parallel
+    return {"nopython": nopython, "nogil": nogil, "parallel": parallel}
 
 
-def jit_user_function(
-    func: Callable, nopython: bool, nogil: bool, parallel: bool
-) -> Callable:
+def jit_user_function(func: Callable) -> Callable:
     """
-    JIT the user's function given the configurable arguments.
+    If user function is not jitted already, mark the user's function
+    as jitable.
 
     Parameters
     ----------
     func : function
         user defined function
-    nopython : bool
-        nopython parameter for numba.JIT
-    nogil : bool
-        nogil parameter for numba.JIT
-    parallel : bool
-        parallel parameter for numba.JIT
 
     Returns
     -------
     function
-        Numba JITed function
+        Numba JITed function, or function marked as JITable by numba
     """
-    numba = import_optional_dependency("numba")
-
-    if Version(numba.__version__) >= Version("0.49.0"):
-        is_jitted = numba.extending.is_jitted(func)
+    if TYPE_CHECKING:
+        import numba
     else:
-        is_jitted = isinstance(func, numba.targets.registry.CPUDispatcher)
+        numba = import_optional_dependency("numba")
 
-    if is_jitted:
+    if numba.extending.is_jitted(func):
         # Don't jit a user passed jitted function
         numba_func = func
+    elif getattr(np, func.__name__, False) is func or isinstance(
+        func, types.BuiltinFunctionType
+    ):
+        # Not necessary to jit builtins or np functions
+        # This will mess up register_jitable
+        numba_func = func
     else:
-
-        @numba.generated_jit(nopython=nopython, nogil=nogil, parallel=parallel)
-        def numba_func(data, *_args):
-            if getattr(np, func.__name__, False) is func or isinstance(
-                func, types.BuiltinFunctionType
-            ):
-                jf = func
-            else:
-                jf = numba.jit(func, nopython=nopython, nogil=nogil)
-
-            def impl(data, *_args):
-                return jf(data, *_args)
-
-            return impl
+        numba_func = numba.extending.register_jitable(func)
 
     return numba_func
+
+
+_sentinel = object()
+
+
+def prepare_function_arguments(
+    func: Callable, args: tuple, kwargs: dict, *, num_required_args: int
+) -> tuple[tuple, dict]:
+    """
+    Prepare arguments for jitted function. As numba functions do not support kwargs,
+    we try to move kwargs into args if possible.
+
+    Parameters
+    ----------
+    func : function
+        User defined function
+    args : tuple
+        User input positional arguments
+    kwargs : dict
+        User input keyword arguments
+    num_required_args : int
+        The number of leading positional arguments we will pass to udf.
+        These are not supplied by the user.
+        e.g. for groupby we require "values", "index" as the first two arguments:
+        `numba_func(group, group_index, *args)`, in this case num_required_args=2.
+        See :func:`pandas.core.groupby.numba_.generate_numba_agg_func`
+
+    Returns
+    -------
+    tuple[tuple, dict]
+        args, kwargs
+
+    """
+    if not kwargs:
+        return args, kwargs
+
+    # the udf should have this pattern: def udf(arg1, arg2, ..., *args, **kwargs):...
+    signature = inspect.signature(func)
+    arguments = signature.bind(*[_sentinel] * num_required_args, *args, **kwargs)
+    arguments.apply_defaults()
+    # Ref: https://peps.python.org/pep-0362/
+    # Arguments which could be passed as part of either *args or **kwargs
+    # will be included only in the BoundArguments.args attribute.
+    args = arguments.args
+    kwargs = arguments.kwargs
+
+    if kwargs:
+        # Note: in case numba supports keyword-only arguments in
+        # a future version, we should remove this check. But this
+        # seems unlikely to happen soon.
+
+        raise NumbaUtilError(
+            "numba does not support keyword-only arguments"
+            "https://github.com/numba/numba/issues/2916, "
+            "https://github.com/numba/numba/issues/6846"
+        )
+
+    args = args[num_required_args:]
+    return args, kwargs

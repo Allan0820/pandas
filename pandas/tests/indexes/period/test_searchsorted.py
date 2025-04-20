@@ -7,8 +7,6 @@ from pandas import (
     NaT,
     Period,
     PeriodIndex,
-    Series,
-    array,
 )
 import pandas._testing as tm
 
@@ -29,25 +27,24 @@ class TestSearchsorted:
 
         assert pidx.searchsorted(NaT) == 5
 
-        msg = "Input has different freq=H from PeriodArray"
+        msg = "Input has different freq=h from PeriodArray"
         with pytest.raises(IncompatibleFrequency, match=msg):
-            pidx.searchsorted(Period("2014-01-01", freq="H"))
+            pidx.searchsorted(Period("2014-01-01", freq="h"))
 
         msg = "Input has different freq=5D from PeriodArray"
         with pytest.raises(IncompatibleFrequency, match=msg):
             pidx.searchsorted(Period("2014-01-01", freq="5D"))
 
-    @pytest.mark.parametrize("klass", [list, np.array, array, Series])
-    def test_searchsorted_different_argument_classes(self, klass):
+    def test_searchsorted_different_argument_classes(self, listlike_box):
         pidx = PeriodIndex(
             ["2014-01-01", "2014-01-02", "2014-01-03", "2014-01-04", "2014-01-05"],
             freq="D",
         )
-        result = pidx.searchsorted(klass(pidx))
+        result = pidx.searchsorted(listlike_box(pidx))
         expected = np.arange(len(pidx), dtype=result.dtype)
         tm.assert_numpy_array_equal(result, expected)
 
-        result = pidx._data.searchsorted(klass(pidx))
+        result = pidx._data.searchsorted(listlike_box(pidx))
         tm.assert_numpy_array_equal(result, expected)
 
     def test_searchsorted_invalid(self):

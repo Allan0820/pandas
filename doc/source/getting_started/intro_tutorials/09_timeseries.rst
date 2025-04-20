@@ -10,15 +10,15 @@
 .. raw:: html
 
     <div class="card gs-data">
-        <div class="card-header">
+        <div class="card-header gs-data-header">
             <div class="gs-data-title">
                 Data used for this tutorial:
             </div>
         </div>
         <ul class="list-group list-group-flush">
-            <li class="list-group-item">
-                <div data-toggle="collapse" href="#collapsedata" role="button" aria-expanded="false" aria-controls="collapsedata">
-                    <span class="badge badge-dark">Air quality data</span>
+            <li class="list-group-item gs-data-list">
+                <div data-bs-toggle="collapse" href="#collapsedata" role="button" aria-expanded="false" aria-controls="collapsedata">
+                    <span class="badge bg-secondary">Air quality data</span>
                 </div>
                 <div class="collapse" id="collapsedata">
                     <div class="card-body">
@@ -26,7 +26,7 @@
 
 For this tutorial, air quality data about :math:`NO_2` and Particulate
 matter less than 2.5 micrometers is used, made available by
-`openaq <https://openaq.org>`__ and downloaded using the
+`OpenAQ <https://openaq.org>`__ and downloaded using the
 `py-openaq <http://dhhagan.github.io/py-openaq/index.html>`__ package.
 The ``air_quality_no2_long.csv"`` data set provides :math:`NO_2` values
 for the measurement stations *FR04014*, *BETR801* and *London
@@ -35,7 +35,7 @@ Westminster* in respectively Paris, Antwerp and London.
 .. raw:: html
 
                         </p>
-                    <a href="https://github.com/pandas-dev/pandas/tree/master/doc/data/air_quality_no2_long.csv" class="btn btn-dark btn-sm">To raw data</a>
+                    <a href="https://github.com/pandas-dev/pandas/tree/main/doc/data/air_quality_no2_long.csv" class="btn btn-dark btn-sm">To raw data</a>
                 </div>
             </div>
 
@@ -55,8 +55,8 @@ Westminster* in respectively Paris, Antwerp and London.
     </ul>
     </div>
 
-How to handle time series data with ease?
------------------------------------------
+How to handle time series data with ease
+----------------------------------------
 
 .. _10min_tut_09_timeseries.properties:
 
@@ -77,9 +77,9 @@ I want to work with the dates in the column ``datetime`` as datetime objects ins
 
 Initially, the values in ``datetime`` are character strings and do not
 provide any datetime operations (e.g. extract the year, day of the
-week,…). By applying the ``to_datetime`` function, pandas interprets the
+week, …). By applying the ``to_datetime`` function, pandas interprets the
 strings and convert these to datetime (i.e. ``datetime64[ns, UTC]``)
-objects. In pandas we call these datetime objects similar to
+objects. In pandas we call these datetime objects that are similar to
 ``datetime.datetime`` from the standard library as :class:`pandas.Timestamp`.
 
 .. raw:: html
@@ -117,7 +117,7 @@ length of our time series:
     air_quality["datetime"].max() - air_quality["datetime"].min()
 
 The result is a :class:`pandas.Timedelta` object, similar to ``datetime.timedelta``
-from the standard Python library and defining a time duration.
+from the standard Python library which defines a time duration.
 
 .. raw:: html
 
@@ -144,7 +144,7 @@ I want to add a new column to the ``DataFrame`` containing only the month of the
 
 By using ``Timestamp`` objects for dates, a lot of time-related
 properties are provided by pandas. For example the ``month``, but also
-``year``, ``weekofyear``, ``quarter``,… All of these properties are
+``year``, ``quarter``,… All of these properties are
 accessible by the ``dt`` accessor.
 
 .. raw:: html
@@ -209,7 +209,7 @@ Plot the typical :math:`NO_2` pattern during the day of our time series of all s
     air_quality.groupby(air_quality["datetime"].dt.hour)["value"].mean().plot(
         kind='bar', rot=0, ax=axs
     )
-    plt.xlabel("Hour of the day");  # custom x label using matplotlib
+    plt.xlabel("Hour of the day");  # custom x label using Matplotlib
     @savefig 09_bar_chart.png
     plt.ylabel("$NO_2 (µg/m^3)$");
 
@@ -257,7 +257,7 @@ the adapted time scale on plots. Let’s apply this on our data.
     <ul class="task-bullet">
         <li>
 
-Create a plot of the :math:`NO_2` values in the different stations from the 20th of May till the end of 21st of May
+Create a plot of the :math:`NO_2` values in the different stations from May 20th till the end of May 21st.
 
 .. ipython:: python
     :okwarning:
@@ -295,7 +295,7 @@ Aggregate the current hourly time series values to the monthly maximum value in 
 
 .. ipython:: python
 
-    monthly_max = no_2.resample("M").max()
+    monthly_max = no_2.resample("MS").max()
     monthly_max
 
 A very powerful method on time series data with a datetime index, is the
@@ -310,7 +310,7 @@ converting secondly data into 5-minutely data).
 The :meth:`~Series.resample` method is similar to a groupby operation:
 
 -  it provides a time-based grouping, by using a string (e.g. ``M``,
-   ``5H``,…) that defines the target frequency
+   ``5H``, …) that defines the target frequency
 -  it requires an aggregation function such as ``mean``, ``max``,…
 
 .. raw:: html

@@ -1,11 +1,10 @@
 import pytest
 
+from pandas.errors import CSSWarning
+
 import pandas._testing as tm
 
-from pandas.io.formats.css import (
-    CSSResolver,
-    CSSWarning,
-)
+from pandas.io.formats.css import CSSResolver
 
 
 def assert_resolves(css, props, inherited=None):
@@ -39,28 +38,31 @@ def test_css_parse_normalisation(name, norm, abnorm):
 
 
 @pytest.mark.parametrize(
-    "invalid_css,remainder",
+    "invalid_css,remainder,msg",
     [
         # No colon
-        ("hello-world", ""),
-        ("border-style: solid; hello-world", "border-style: solid"),
+        ("hello-world", "", "expected a colon"),
+        ("border-style: solid; hello-world", "border-style: solid", "expected a colon"),
         (
             "border-style: solid; hello-world; font-weight: bold",
             "border-style: solid; font-weight: bold",
+            "expected a colon",
         ),
         # Unclosed string fail
         # Invalid size
-        ("font-size: blah", "font-size: 1em"),
-        ("font-size: 1a2b", "font-size: 1em"),
-        ("font-size: 1e5pt", "font-size: 1em"),
-        ("font-size: 1+6pt", "font-size: 1em"),
-        ("font-size: 1unknownunit", "font-size: 1em"),
-        ("font-size: 10", "font-size: 1em"),
-        ("font-size: 10 pt", "font-size: 1em"),
+        ("font-size: blah", "font-size: 1em", "Unhandled size"),
+        ("font-size: 1a2b", "font-size: 1em", "Unhandled size"),
+        ("font-size: 1e5pt", "font-size: 1em", "Unhandled size"),
+        ("font-size: 1+6pt", "font-size: 1em", "Unhandled size"),
+        ("font-size: 1unknownunit", "font-size: 1em", "Unhandled size"),
+        ("font-size: 10", "font-size: 1em", "Unhandled size"),
+        ("font-size: 10 pt", "font-size: 1em", "Unhandled size"),
+        # Too many args
+        ("border-top: 1pt solid red green", "border-top: 1pt solid green", "Too many"),
     ],
 )
-def test_css_parse_invalid(invalid_css, remainder):
-    with tm.assert_produces_warning(CSSWarning):
+def test_css_parse_invalid(invalid_css, remainder, msg):
+    with tm.assert_produces_warning(CSSWarning, match=msg):
         assert_same_resolution(invalid_css, remainder)
 
 
@@ -119,8 +121,67 @@ def test_css_side_shorthands(shorthand, expansions):
         {top: "1pt", right: "4pt", bottom: "2pt", left: "0pt"},
     )
 
-    with tm.assert_produces_warning(CSSWarning):
+    with tm.assert_produces_warning(CSSWarning, match="Could not expand"):
         assert_resolves(f"{shorthand}: 1pt 1pt 1pt 1pt 1pt", {})
+
+
+@pytest.mark.parametrize(
+    "shorthand,sides",
+    [
+        ("border-top", ["top"]),
+        ("border-right", ["right"]),
+        ("border-bottom", ["bottom"]),
+        ("border-left", ["left"]),
+        ("border", ["top", "right", "bottom", "left"]),
+    ],
+)
+def test_css_border_shorthand_sides(shorthand, sides):
+    def create_border_dict(sides, color=None, style=None, width=None):
+        resolved = {}
+        for side in sides:
+            if color:
+                resolved[f"border-{side}-color"] = color
+            if style:
+                resolved[f"border-{side}-style"] = style
+            if width:
+                resolved[f"border-{side}-width"] = width
+        return resolved
+
+    assert_resolves(
+        f"{shorthand}: 1pt red solid", create_border_dict(sides, "red", "solid", "1pt")
+    )
+
+
+@pytest.mark.parametrize(
+    "prop, expected",
+    [
+        ("1pt red solid", ("red", "solid", "1pt")),
+        ("red 1pt solid", ("red", "solid", "1pt")),
+        ("red solid 1pt", ("red", "solid", "1pt")),
+        ("solid 1pt red", ("red", "solid", "1pt")),
+        ("red solid", ("red", "solid", "1.500000pt")),
+        # Note: color=black is not CSS conforming
+        # (See https://drafts.csswg.org/css-backgrounds/#border-shorthands)
+        ("1pt solid", ("black", "solid", "1pt")),
+        ("1pt red", ("red", "none", "1pt")),
+        ("red", ("red", "none", "1.500000pt")),
+        ("1pt", ("black", "none", "1pt")),
+        ("solid", ("black", "solid", "1.500000pt")),
+        # Sizes
+        ("1em", ("black", "none", "12pt")),
+    ],
+)
+def test_css_border_shorthands(prop, expected):
+    color, style, width = expected
+
+    assert_resolves(
+        f"border-left: {prop}",
+        {
+            "border-left-color": color,
+            "border-left-style": style,
+            "border-left-width": width,
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -132,8 +193,7 @@ def test_css_side_shorthands(shorthand, expansions):
         (
             "margin: 1px; margin-top: 2px",
             "",
-            "margin-left: 1px; margin-right: 1px; "
-            + "margin-bottom: 1px; margin-top: 2px",
+            "margin-left: 1px; margin-right: 1px; margin-bottom: 1px; margin-top: 2px",
         ),
         ("margin-top: 2px", "margin: 1px", "margin: 1px; margin-top: 2px"),
         ("margin: 1px", "margin-top: 2px", "margin: 1px"),
@@ -182,7 +242,6 @@ def test_css_none_absent(style, equiv):
         (".25in", "18pt"),
         ("02.54cm", "72pt"),
         ("25.4mm", "72pt"),
-        ("101.6q", "72pt"),
         ("101.6q", "72pt"),
     ],
 )

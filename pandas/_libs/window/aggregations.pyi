@@ -6,6 +6,11 @@ from typing import (
 
 import numpy as np
 
+from pandas._typing import (
+    WindowingRankType,
+    npt,
+)
+
 def roll_sum(
     values: np.ndarray,  # const float64_t[:]
     start: np.ndarray,  # np.ndarray[np.int64]
@@ -55,6 +60,18 @@ def roll_min(
     end: np.ndarray,  # np.ndarray[np.int64]
     minp: int,  # int64_t
 ) -> np.ndarray: ...  # np.ndarray[float]
+def roll_first(
+    values: np.ndarray,  # np.ndarray[np.float64]
+    start: np.ndarray,  # np.ndarray[np.int64]
+    end: np.ndarray,  # np.ndarray[np.int64]
+    minp: int,  # int64_t
+) -> np.ndarray: ...  # np.ndarray[float]
+def roll_last(
+    values: np.ndarray,  # np.ndarray[np.float64]
+    start: np.ndarray,  # np.ndarray[np.int64]
+    end: np.ndarray,  # np.ndarray[np.int64]
+    minp: int,  # int64_t
+) -> np.ndarray: ...  # np.ndarray[float]
 def roll_quantile(
     values: np.ndarray,  # const float64_t[:]
     start: np.ndarray,  # np.ndarray[np.int64]
@@ -62,6 +79,21 @@ def roll_quantile(
     minp: int,  # int64_t
     quantile: float,  # float64_t
     interpolation: Literal["linear", "lower", "higher", "nearest", "midpoint"],
+) -> np.ndarray: ...  # np.ndarray[float]
+def roll_rank(
+    values: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+    minp: int,
+    percentile: bool,
+    method: WindowingRankType,
+    ascending: bool,
+) -> np.ndarray: ...  # np.ndarray[float]
+def roll_nunique(
+    values: np.ndarray,  # const float64_t[:]
+    start: np.ndarray,  # np.ndarray[np.int64]
+    end: np.ndarray,  # np.ndarray[np.int64]
+    minp: int,  # int64_t
 ) -> np.ndarray: ...  # np.ndarray[float]
 def roll_apply(
     obj: object,
@@ -72,7 +104,7 @@ def roll_apply(
     raw: bool,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-) -> np.ndarray: ...  # np.ndarray[float]  # FIXME: could also be type(obj) if n==0
+) -> npt.NDArray[np.float64]: ...
 def roll_weighted_sum(
     values: np.ndarray,  # const float64_t[:]
     weights: np.ndarray,  # const float64_t[:]
@@ -89,7 +121,7 @@ def roll_weighted_var(
     minp: int,  # int64_t
     ddof: int,  # unsigned int
 ) -> np.ndarray: ...  # np.ndarray[np.float64]
-def ewma(
+def ewm(
     vals: np.ndarray,  # const float64_t[:]
     start: np.ndarray,  # const int64_t[:]
     end: np.ndarray,  # const int64_t[:]
@@ -97,7 +129,8 @@ def ewma(
     com: float,  # float64_t
     adjust: bool,
     ignore_na: bool,
-    deltas: np.ndarray,  # const float64_t[:]
+    deltas: np.ndarray | None = None,  # const float64_t[:]
+    normalize: bool = True,
 ) -> np.ndarray: ...  # np.ndarray[np.float64]
 def ewmcov(
     input_x: np.ndarray,  # const float64_t[:]
